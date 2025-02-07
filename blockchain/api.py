@@ -35,6 +35,11 @@ class API:
         # adding blocks from splitbrain
         if len(res) < limit:
             res += self.bc.fork_blocks.values()
+        for block in res:
+            if isinstance(block, dict):
+                for key, value in block.items():
+                    if isinstance(value, bytes):
+                        print(f"Non-serializable bytes found in {key}: {value}")
         return res
 
     def add_block(self, block):

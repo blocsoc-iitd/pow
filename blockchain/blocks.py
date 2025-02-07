@@ -1,9 +1,8 @@
 import time
 from hashlib import sha256
-from merkletools import MerkleTools
-
+from pymerkle import InmemoryTree as MerkleTree
+import base64
 from .wallet import Address
-
 
 class Input:
     __slots__ = 'prev_tx_hash', 'output_index', 'signature', '_hash', 'address', 'index', 'amount'
@@ -177,11 +176,14 @@ class Block:
         """
         if self.merkel_root:
             return self.merkel_root
-        mt = MerkleTools(hash_type="SHA256")
+        mt = MerkleTree(hash_type="SHA256")
         for el in self.txs:
-            mt.add_leaf(el.hash)
-        mt.make_tree()
-        self.merkel_root = mt.get_merkle_root()
+            if isinstance(el, str):
+                mt.append_entry(el.hash.encode())
+            else :
+                mt.append_entry(el.hash.encode())
+        # mt.make_tree()
+        self.merkel_root = base64.b64encode(mt.get_state()).decode()
         return self.merkel_root
 
     def hash(self, nonce=None):

@@ -1,4 +1,6 @@
+import base64
 from fastapi import FastAPI, BackgroundTasks, Request
+from fastapi.encoders import jsonable_encoder
 import uvicorn
 import requests
 import asyncio
@@ -11,6 +13,7 @@ from blockchain.blockchain import Blockchain
 from blockchain.wallet import Wallet
 from blockchain.api import API
 from blockchain.blocks import Input, Output, Tx
+from contextlib import asynccontextmanager
 
 # Custom formatter
 class ColorFormatter(logging.Formatter):
@@ -35,12 +38,40 @@ class ColorFormatter(logging.Formatter):
 
 logger = logging.getLogger("Blockchain")
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup logic
+    app.config['sync_running'] = True
+    loop = asyncio.get_running_loop()
+
+    # Sync data before running the node
+    await loop.run_in_executor(None, sync_data)
+
+    # Add our node address to connected nodes for network broadcasting
+    loop.run_in_executor(
+        None, 
+        broadcast, 
+        '/server/add_nodes', 
+        {'nodes': [f"{app.config['host']}:{app.config['port']}"]}, 
+        False
+    )
+
+    if app.config['mine']:
+        app.jobs['mining'] = asyncio.Event()
+        loop.run_in_executor(None, mine, app.jobs['mining'])
+
+    yield  # Application runs here
+
+    # Shutdown logic
+    if app.jobs.get('mining'):
+        app.jobs['mining'].set()
+
 '''
 TODO:
 * sync data while split brain exist 
 '''
 
-app = FastAPI()
+app = FastAPI(lifespan=lifespan)
 app.config = {}
 app.jobs = {}
 
@@ -216,7 +247,8 @@ async def status():
 @app.get("/chain/sync")
 async def sync(from_block:int, limit:int=20):
     bc = app.config['api']
-    return bc.get_chain(from_block, limit)
+    data = bc.get_chain(from_block, limit)
+    return jsonable_encoder(data)
 
 @app.post("/chain/add_block")
 async def add_block(block:BlockModel, background_tasks: BackgroundTasks, request: Request):
@@ -262,23 +294,6 @@ async def add_tx(tx: TxModel, background_tasks: BackgroundTasks, request: Reques
             return {"success":True}
         logger.info('Tx already in stack. Skipped.')
         return {"success":False, "msg":"Duplicate"}
-
-@app.on_event("startup")
-async def on_startup():
-    app.config['sync_running'] = True
-    loop = asyncio.get_running_loop()
-    # sync data before run the node
-    await loop.run_in_executor(None, sync_data)
-    # add our node address to connected node to broadcast around network
-    loop.run_in_executor(None, broadcast, '/server/add_nodes', {'nodes':['%s:%s' % (app.config['host'],app.config['port'])]}, False)
-    if app.config['mine']:
-        app.jobs['mining'] = asyncio.Event()
-        loop.run_in_executor(None, mine, app.jobs['mining'])
-    
-@app.on_event("shutdown")
-async def on_shutdown():
-    if app.jobs.get('mining'):
-        app.jobs.get('mining').set()
 
 #### Utils ###########################
 def restart_miner():
